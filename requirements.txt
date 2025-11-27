@@ -1,0 +1,24 @@
+# --- Core data and PDF libraries ---
+pandas>=2.0.0
+numpy>=1.24.0
+openpyxl>=3.1.0
+PyMuPDF>=1.24.0
+
+# --- Backend (FastAPI + server) ---
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+
+# --- Frontend (Gradio UI) ---
+gradio>=4.14.0
+
+# --- Gemini official SDK ---
+google-generativeai>=0.7.0
+
+# --- HTTP requests ---
+requests>=2.31.0
+
+# --- Pydantic (compatible with Python 3.8–3.12) ---
+pydantic>=1.10.13
+
+# --- CORS (if needed for frontend integrations) ---
+python-multipart>=0.0.6
