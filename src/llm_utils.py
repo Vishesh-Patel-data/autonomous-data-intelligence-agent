@@ -115,3 +115,137 @@ Include sections:
 Write clearly and concisely.
 """
     return _call_gemini_http(prompt)
+
+# ------------------------------------------------------------
+# PDF summarization helpers (single + combined)
+# ------------------------------------------------------------
+import os
+import json
+import requests
+
+
+def summarize_pdf_text_with_gemini(pdf_text: str) -> str:
+    """
+    Summarize a single PDF's raw text into a concise Markdown summary.
+    Uses the Gemini HTTP API (same style as app_gradio.py).
+    """
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return "PDF summary error: GOOGLE_API_KEY environment variable is not set."
+
+    model = "gemini-2.5-flash-lite"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+    prompt = f"""
+You are a senior analyst.
+
+Summarize the following PDF content.
+
+Include:
+- A concise overview
+- Key themes/topics
+- Important insights
+- Any high-level structure (sections, phases, etc.)
+- Write in clean Markdown
+
+PDF content:
+---
+{pdf_text[:20000]}
+---
+"""
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
+
+    body = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
+        ]
+    }
+
+    try:
+        resp = requests.post(url, headers=headers, json=body, timeout=300)
+        resp.raise_for_status()
+        data = resp.json()
+
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return "PDF summary error: LLM returned no candidates."
+
+        parts = candidates[0].get("content", {}).get("parts", [])
+        if not parts:
+            return "PDF summary error: LLM returned no content parts."
+
+        return parts[0].get("text", "") or "PDF summary error: LLM returned empty text."
+
+    except requests.exceptions.HTTPError as http_err:
+        return f"PDF summary HTTP error: {http_err}\nResponse: {resp.text}"
+    except Exception as e:
+        return f"PDF summary error: {e}"
+
+
+def summarize_multiple_pdfs_with_gemini(pdf_summaries: dict) -> str:
+    """
+    Given a dict {pdf_name: single_summary}, produce a combined meta-summary.
+    """
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return "Combined PDF summary error: GOOGLE_API_KEY environment variable is not set."
+
+    model = "gemini-2.5-flash-lite"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+
+    prompt = f"""
+You are an AI analyst. Below are summaries of multiple PDF documents:
+
+{json.dumps(pdf_summaries, indent=2)}
+
+Produce a single clear combined summary including:
+- What all documents are about overall
+- Key shared themes and differences
+- Any implicit structure or phases
+- High-level strategic takeaways
+- Write in business-ready Markdown
+"""
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
+
+    body = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
+        ]
+    }
+
+    try:
+        resp = requests.post(url, headers=headers, json=body, timeout=300)
+        resp.raise_for_status()
+        data = resp.json()
+
+        candidates = data.get("candidates", [])
+        if not candidates:
+            return "Combined PDF summary error: LLM returned no candidates."
+
+        parts = candidates[0].get("content", {}).get("parts", [])
+        if not parts:
+            return "Combined PDF summary error: LLM returned no content parts."
+
+        return parts[0].get("text", "") or "Combined PDF summary error: LLM returned empty text."
+
+    except requests.exceptions.HTTPError as http_err:
+        return f"Combined PDF summary HTTP error: {http_err}\nResponse: {resp.text}"
+    except Exception as e:
+        return f"Combined PDF summary error: {e}"
+

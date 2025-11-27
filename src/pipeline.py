@@ -15,13 +15,18 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
 import fitz  # PyMuPDF
 
-from .llm_utils import generate_eda_report_markdown
+
+from .llm_utils import (
+    generate_eda_report_markdown,  # you already have this
+    summarize_pdf_text_with_gemini,
+    summarize_multiple_pdfs_with_gemini,
+)
 
 
 # NOTE:
@@ -208,34 +213,41 @@ def simple_clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 def run_full_pipeline(
     tabular_path: Optional[str] = None,
-    pdf_folder: Optional[str] = None,
+    pdf_paths: Optional[List[str]] = None,
 ) -> FullPipelineResult:
     """
     High-level entry point that will be called by:
-    - ADK agent tools
     - FastAPI endpoints
-    - Notebooks, etc.
+    - Notebooks
+    - (later) ADK tools, etc.
 
-    CURRENT IMPLEMENTATION (STEP 5):
+    CURRENT IMPLEMENTATION:
     - If tabular_path is provided:
         - load the file
         - run simple cleaning
         - compute EDA summary
-        - (EDA report text will be filled in later with LLM)
-    - PDF + executive report will be wired in later steps.
+        - generate EDA report via Gemini
+    - If pdf_paths are provided:
+        - extract text from each PDF
+        - summarize each with Gemini
+        - create a combined meta-summary
     """
     tabular_result: Optional[TabularPipelineResult] = None
     pdf_result: Optional[PdfPipelineResult] = None
-    executive_report_md: Optional[str] = None
+    executive_report_md: Optional[str] = None  # reserved for future
 
-    # ---- Tabular pipeline (basic version) ----
-    if tabular_path is not None:
+    # -----------------------------
+    # 1) Tabular pipeline (unchanged behavior)
+    # -----------------------------
+    if tabular_path:
         raw_df = load_tabular_file(tabular_path)
         cleaned_df = simple_clean_dataframe(raw_df)
         eda_summary = compute_eda_summary(cleaned_df)
 
-        # Placeholder EDA report text (LLM will replace this later)
-        eda_report_md = generate_eda_report_markdown(eda_summary)
+        try:
+            eda_report_md = generate_eda_report_markdown(eda_summary)
+        except Exception as e:
+            eda_report_md = f"LLM EDA report generation failed: {e}"
 
         tabular_result = TabularPipelineResult(
             raw_df=raw_df,
@@ -244,7 +256,33 @@ def run_full_pipeline(
             eda_report_markdown=eda_report_md,
         )
 
-    # ---- PDF pipeline + executive report will be implemented later ----
+    # -----------------------------
+    # 2) PDF pipeline (new)
+    # -----------------------------
+    if pdf_paths:
+        # Filter only existing files, be defensive
+        existing_pdfs = [p for p in pdf_paths if os.path.isfile(p)]
+        pdf_summaries: Dict[str, str] = {}
+
+        for pdf_path in existing_pdfs:
+            pdf_name = os.path.basename(pdf_path)
+            text = extract_pdf_text(pdf_path)
+
+            if (not text) or text.startswith("[ERROR]"):
+                pdf_summaries[pdf_name] = text or "[ERROR] No text extracted from PDF."
+                continue
+
+            single_summary = summarize_pdf_text_with_gemini(text)
+            pdf_summaries[pdf_name] = single_summary
+
+        combined_summary = ""
+        if pdf_summaries:
+            combined_summary = summarize_multiple_pdfs_with_gemini(pdf_summaries)
+
+        pdf_result = PdfPipelineResult(
+            pdf_summaries=pdf_summaries,
+            combined_summary_markdown=combined_summary,
+        )
 
     return FullPipelineResult(
         tabular=tabular_result,
@@ -253,11 +291,3 @@ def run_full_pipeline(
     )
 
 
-if __name__ == "__main__":
-    # Small manual test hook – this won't run in ADK,
-    # but is useful if you run `python src/pipeline.py` locally.
-    print("pipeline.py loaded. Implementations will be added step-by-step.")
-
-
-
-# export GOOGLE_API_KEY="AIzaSyCKi1tczf65IQsGxeP83ttBEd69wqwuNVE"

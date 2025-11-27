@@ -16,7 +16,7 @@ Later we will:
 from __future__ import annotations
 
 import os
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 
 from fastapi import FastAPI, HTTPException
@@ -36,9 +36,11 @@ app = FastAPI(
 # Request / Response models
 # ------------------------------------------------------------
 
-class LocalPipelineRequest(BaseModel):
-    tabular_path: str
-    pdf_folder: Optional[str] = None
+
+class PipelineRequest(BaseModel):
+    tabular_path: Optional[str] = None
+    pdf_paths: Optional[List[str]] = None
+
 
 
 class PipelineSummaryResponse(BaseModel):
@@ -64,44 +66,52 @@ def health_check():
 # Run pipeline on a local path (dev only)
 # ------------------------------------------------------------
 
-@app.post("/run-pipeline/local", response_model=PipelineSummaryResponse)
-def run_pipeline_local(req: LocalPipelineRequest):
+@app.post("/run-pipeline/local")
+async def run_pipeline_local(request: PipelineRequest):
     """
-    Development-only endpoint:
-    - Takes a local path to CSV/Excel
-    - Runs the full pipeline
-    - Returns a compact summary suitable for an agent to consume
-    """
-    if not os.path.exists(req.tabular_path):
-        raise HTTPException(
-            status_code=400,
-            detail=f"tabular_path does not exist: {req.tabular_path}",
-        )
+    Run the full pipeline on:
+    - an optional tabular path (CSV/Excel)
+    - optional list of PDF paths
 
+    Returns a combined JSON with:
+    - Tabular summary + EDA report (if tabular_path set)
+    - PDF summaries + combined PDF summary (if pdf_paths set)
+    """
     try:
         result: FullPipelineResult = run_full_pipeline(
-            tabular_path=req.tabular_path,
-            pdf_folder=req.pdf_folder,
+            tabular_path=request.tabular_path,
+            pdf_paths=request.pdf_paths,
         )
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    if result.tabular is None and result.pdfs is None:
         raise HTTPException(
-            status_code=500,
-            detail=f"Pipeline execution failed: {e}",
+            status_code=400,
+            detail="No valid inputs provided. Expected tabular_path and/or pdf_paths."
         )
 
-    if result.tabular is None:
-        raise HTTPException(
-            status_code=500,
-            detail="Pipeline returned no tabular result.",
+    response: Dict[str, Any] = {}
+
+    # Tabular output (backwards compatible)
+    if result.tabular is not None:
+        t = result.tabular
+        response.update(
+            {
+                "raw_rows": int(t.raw_df.shape[0]),
+                "raw_cols": int(t.raw_df.shape[1]),
+                "cleaned_rows": int(t.cleaned_df.shape[0]),
+                "cleaned_cols": int(t.cleaned_df.shape[1]),
+                "columns": list(t.cleaned_df.columns),
+                "eda_report_markdown": t.eda_report_markdown,
+            }
         )
 
-    tab = result.tabular
+    # PDF output (new)
+    if result.pdfs is not None:
+        p = result.pdfs
+        response["pdf_summaries"] = p.pdf_summaries
+        response["pdf_combined_summary_markdown"] = p.combined_summary_markdown
 
-    return PipelineSummaryResponse(
-        raw_rows=tab.raw_df.shape[0],
-        raw_cols=tab.raw_df.shape[1],
-        cleaned_rows=tab.cleaned_df.shape[0],
-        cleaned_cols=tab.cleaned_df.shape[1],
-        columns=[str(c) for c in tab.cleaned_df.columns],
-        eda_report_markdown=tab.eda_report_markdown,
-    )
+    return response
+
